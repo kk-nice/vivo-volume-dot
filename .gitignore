@@ -1,0 +1,14 @@
+# 构建中间产物
+build/
+
+# 签名密钥（不入库；缺失时 build.ps1 会自动生成新密钥，签名会变）
+keystore.jks
+*.jks
+*.keystore
+
+# 签名辅助文件
+*.idsig
+
+# 系统垃圾
+Thumbs.db
+.DS_Store

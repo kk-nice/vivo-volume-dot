@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">音量小白点</string>
+    <string name="acc_desc">仅用于在弹出音量面板后自动补一次点按，展开逐应用音量滑块。不读取屏幕内容。</string>
+</resources>
