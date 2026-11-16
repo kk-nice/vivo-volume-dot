@@ -27,6 +27,42 @@
 - 设置 → 电池 → **后台高耗电**：允许「音量小白点」
 - 重启后会自动拉起（已内置开机广播接收器）
 
+## Android 15 / OriginOS：侧载受限设置（必读）
+
+本 APK 不是从应用商店装的，属于 **sideload（侧载）应用**。Android 15 起，系统默认禁止侧载应用使用高敏权限（无障碍、悬浮窗、使用情况访问、通知监听、短信、默认短信/拨号、设备管理），
+开启时会弹「受限制的设置」风险提示，并给出"保持限制 / 解除限制"两个选项。
+
+**本机实测结论**
+- `pm set-app-allowed-restricted-settings` 这条命令在 vivo V2507A（Android 16）上**被移除了**（返回 `Unknown command`）；
+- 真实可用的是 appop：`ACCESS_RESTRICTED_SETTINGS`；
+- OriginOS 把「应用信息 → 三点菜单 → 允许受限设置」这个入口**藏掉了**，很多人找不到；
+- 解除限制后是**按包名整体放行**，不是逐个权限单独放开。
+
+**一条命令放行（放行后重启不会还原，记录持久化在 /data/system/appops.xml）**
+```
+adb shell appops set org.xx.volumedot ACCESS_RESTRICTED_SETTINGS allow
+```
+**复查**
+```
+adb shell cmd appops get org.xx.volumedot
+→ ACCESS_RESTRICTED_SETTINGS: allow
+```
+
+**会失效、需要重跑的情况**：卸载重装（覆盖安装 `adb install -r` 一般保留）、恢复出厂、换包名重装。
+所以本仓库提供了 `tools/adb-fix.bat`（双击即可），它一次做三件事：
+
+1. 放行受限设置 `ACCESS_RESTRICTED_SETTINGS`
+2. 放行悬浮窗 `SYSTEM_ALERT_WINDOW`（系统有时会把它打成 `ignore`）
+3. 重新绑定无障碍服务（保留其它已启用的无障碍服务，如 GKD）
+
+命令行用法：`powershell -ExecutionPolicy Bypass -File tools\adb-fix.ps1 -Serial <序列号>`
+
+**关于「"音量小白点"正在其他应用的上层显示内容」这条通知**
+它是系统 `WindowManager` 发的（通道 id `com.android.server.wm.AlertWindowNotification - org.xx.volumedot`），**不是 App 自己发的**：
+- 应用内改通知渠道、关通知权限都对它无效；
+- 它的默认重要性就是 `IMPORTANCE_MIN`（静默、不进状态栏），只在通知栏里占一条，划掉后一般不再出现；
+- 本机 `cmd notification` 没有 block-channel 子命令，无法用 adb 直接关掉这个系统通道。
+
 ## 原理（实测记录）
 
 | 环节 | 走通的路径 |
