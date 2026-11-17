@@ -31,12 +31,27 @@ public class TapService extends AccessibilityService {
         super.onServiceConnected();
         instance = this;
         Log.i(TAG, "TapService connected");
+        // 白点是靠本服务加的浮层窗口画的：连上之后把待画的白点补出来
+        new Handler(Looper.getMainLooper()).post(new Runnable() {
+            @Override
+            public void run() {
+                DotService.resync();
+            }
+        });
     }
 
     @Override
     public boolean onUnbind(android.content.Intent intent) {
         instance = null;
         return super.onUnbind(intent);
+    }
+
+    /**
+     * 本实例的 WindowManager。无障碍服务加的窗口属于 TYPE_ACCESSIBILITY_OVERLAY，
+     * 既不需要 SYSTEM_ALERT_WINDOW，也不会触发系统那条“正在其他应用的上层显示内容”的提醒。
+     */
+    public android.view.WindowManager overlayWm() {
+        return (android.view.WindowManager) getSystemService(WINDOW_SERVICE);
     }
 
     @Override

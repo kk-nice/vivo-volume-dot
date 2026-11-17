@@ -56,16 +56,16 @@ public class MainActivity extends Activity {
         stLp.topMargin = dp(20);
         root.addView(mStatus, stLp);
 
-        Button grant = button("①  授予“显示在其他应用上层”权限");
+        Button grant = button("①  开启“无障碍手势”（白点靠它显示，不需要悬浮窗权限）");
         grant.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:" + getPackageName()));
                 try {
-                    startActivity(i);
-                } catch (Exception e) {
-                    startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION));
+                    startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                    Toast.makeText(MainActivity.this,
+                            "请在列表里打开“音量小白点”的无障碍开关", Toast.LENGTH_LONG).show();
+                } catch (Throwable t) {
+                    Toast.makeText(MainActivity.this, "打开无障碍设置失败：" + t, Toast.LENGTH_LONG).show();
                 }
             }
         });
@@ -78,8 +78,10 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 if (!DotService.isRunning) {
-                    if (!canDrawOverlays()) {
-                        Toast.makeText(MainActivity.this, "请先授予悬浮窗权限", Toast.LENGTH_LONG).show();
+                    if (TapService.instance == null) {
+                        Toast.makeText(MainActivity.this,
+                                "请先在系统设置里打开本应用的无障碍开关（白点靠它显示）",
+                                Toast.LENGTH_LONG).show();
                         return;
                     }
                     Intent svc = new Intent(MainActivity.this, DotService.class);
@@ -240,20 +242,37 @@ public class MainActivity extends Activity {
         sp.edit().putInt(key, value).apply();
     }
 
+    private final android.os.Handler mUi = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable mUiTick = new Runnable() {
+        @Override
+        public void run() {
+            refresh();
+            mUi.postDelayed(this, 1000);
+        }
+    };
+
     @Override
     protected void onResume() {
         super.onResume();
         refresh();
+        mUi.removeCallbacks(mUiTick);
+        mUi.postDelayed(mUiTick, 1000);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        mUi.removeCallbacks(mUiTick);
     }
 
     private void refresh() {
-        boolean overlay = canDrawOverlays();
         boolean running = DotService.isRunning;
         boolean visible = DotService.isDotVisible();
         boolean acc = isAccessibilityOn();
-        mStatus.setText("悬浮窗权限：" + (overlay ? "已授予" : "未授予")
+        mStatus.setText("无障碍手势：" + (acc ? "已开启" : "未开启")
                 + "    小白点：" + (running ? (visible ? "显示中" : "已隐藏") : "未运行")
-                + "\n无障碍手势：" + (acc ? "已开启" : "未开启（自动展开/双击调音量需要它）"));
+                + "\n说明：白点由无障碍浮层绘制，不申请悬浮窗权限，"
+                + "系统也就不会再提示“正在其他应用的上层显示内容”。");
         if (!running) {
             mToggle.setText("②  开启小白点");
         } else if (visible) {

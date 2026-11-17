@@ -62,9 +62,11 @@ public class DotService extends Service {
     public static volatile DotService instance;
 
     private WindowManager mWm;
+    private WindowManager mDotWm;
     private View mDot;
     private WindowManager.LayoutParams mLp;
     private final Handler mHandler = new Handler(Looper.getMainLooper());
+    private boolean mWanted = true;
     private boolean mLongPressFired;
     private Runnable mLongPress;
     private Runnable mPendingSingle;
@@ -77,15 +79,49 @@ public class DotService extends Service {
     private int mSizeDp = DEFAULT_SIZE_DP;
     private int mAlphaPct = DEFAULT_ALPHA;
 
+    /** 判断白点窗口此刻是否真的还挂在 WindowManager 上。
+     *  系统摘掉无障碍浮层时 View.isAttachedToWindow() 有时仍返回 true，
+     *  所以用一个 no-op 的 updateViewLayout 去探：窗口没了它会抛异常。 */
+    private boolean dotHealthy() {
+        if (mDot == null || mLp == null) {
+            return false;
+        }
+        try {
+            mDotWm.updateViewLayout(mDot, mLp);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 看门狗：服务进程被重启/无障碍还没连上时，白点会缺；一旦条件具备就补画。 */
+    private final Runnable mWatchdog = new Runnable() {
+        @Override
+        public void run() {
+            if (isRunning) {
+                try {
+                    if (mWanted && mDot == null && TapService.instance != null) {
+                        dbg("watchdog re-add");
+                        showDot();
+                    }
+                } catch (Throwable ignored) {
+                }
+                mHandler.postDelayed(this, 2000);
+            }
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
         instance = this;
         mWm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+        mDotWm = mWm;
         loadStyle();
         showDot();
         startForegroundSafely();
         isRunning = true;
+        mHandler.postDelayed(mWatchdog, 2000);
     }
 
     @Override
@@ -122,7 +158,7 @@ public class DotService extends Service {
         instance = null;
         if (mDot != null) {
             try {
-                mWm.removeView(mDot);
+                mDotWm.removeView(mDot);
             } catch (Throwable t) {
                 Log.w(TAG, "removeView failed", t);
             }
@@ -154,9 +190,31 @@ public class DotService extends Service {
         s.applyStyleToView();
     }
 
+    /** 无障碍刚连上（或重连）时调用。
+     *  注意：无障碍被断开时系统会把浮层窗口摘掉，但本地 View.rootImpl 仍认为“在窗口上”，
+     *  所以这里不能靠健康检查跳过去，必须强制重建一次。 */
+    public static void resync() {
+        DotService s = instance;
+        if (s == null) {
+            return;
+        }
+        if (!s.mWanted) {
+            return;
+        }
+        s.dbg("resync force re-add");
+        if (s.mDot != null) {
+            try {
+                s.mDotWm.removeView(s.mDot);
+            } catch (Throwable ignored) {
+            }
+            s.mDot = null;
+        }
+        s.showDot();
+    }
+
     public static boolean isDotVisible() {
         DotService s = instance;
-        return s != null && s.mDot != null;
+        return s != null && s.dotHealthy();
     }
 
     private void loadStyle() {
@@ -171,7 +229,7 @@ public class DotService extends Service {
         mLp.width = dp(mSizeDp);
         mLp.height = dp(mSizeDp);
         try {
-            mWm.updateViewLayout(mDot, mLp);
+            mDotWm.updateViewLayout(mDot, mLp);
         } catch (Throwable ignored) {
         }
         if (mDot instanceof DotView) {
@@ -251,30 +309,50 @@ public class DotService extends Service {
     // ---------------- 悬浮点 ----------------
 
     private void hideDot() {
+        mWanted = false;
+        dbg("hideDot");
         if (mDot == null) {
             return;
         }
         try {
-            mWm.removeView(mDot);
+            mDotWm.removeView(mDot);
         } catch (Throwable ignored) {
         }
         mDot = null;
-        mHandler.removeCallbacksAndMessages(null);
+        if (mLongPress != null) {
+            mHandler.removeCallbacks(mLongPress);
+        }
+        if (mPendingSingle != null) {
+            mHandler.removeCallbacks(mPendingSingle);
+        }
         refreshNotification();
         Toast.makeText(this, "已隐藏小白点，可从通知栏或本 App 恢复", Toast.LENGTH_LONG).show();
     }
 
     private void showDot() {
         if (mDot != null) {
-            return;
+            if (dotHealthy()) {
+                return;
+            }
+            // 无障碍被关掉时系统会把无障碍浮层窗口摘掉，这里同步清掉引用
+            mDot = null;
         }
         loadStyle();
-        mDot = new DotView(this);
-        ((DotView) mDot).setStyle(mSizeDp, mAlphaPct);
 
-        int type = Build.VERSION.SDK_INT >= 26
-                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                : WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;
+        // 无障碍服务在本进程里时，白点用它加的 TYPE_ACCESSIBILITY_OVERLAY 窗口：
+        // 不需要悬浮窗权限，系统也不会再弹“正在其他应用的上层显示内容”。
+        // 无障碍还没连上就先不画，等 TapService 连上后由 resync() 补上。
+        TapService ts = TapService.instance;
+        if (ts == null) {
+            dbg("showDot waiting a11y");
+            return;
+        }
+        mWanted = true;
+        mDotWm = ts.overlayWm();
+        mDot = new DotView(ts);
+        ((DotView) mDot).setStyle(mSizeDp, mAlphaPct);
+        int type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY;
+        dbg("showDot host=a11y");
 
         mLp = new WindowManager.LayoutParams(
                 dp(mSizeDp), dp(mSizeDp), type,
@@ -326,7 +404,7 @@ public class DotService extends Service {
                             mLp.x = mStartX + dx;
                             mLp.y = mStartY + dy;
                             try {
-                                mWm.updateViewLayout(mDot, mLp);
+                                mDotWm.updateViewLayout(mDot, mLp);
                             } catch (Throwable ignored) {
                             }
                         }
@@ -367,7 +445,7 @@ public class DotService extends Service {
         });
 
         try {
-            mWm.addView(mDot, mLp);
+            mDotWm.addView(mDot, mLp);
             refreshNotification();
         } catch (Throwable t) {
             Log.e(TAG, "addView failed", t);
